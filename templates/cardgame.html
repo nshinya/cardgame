@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>cardgame</title>
+    <script src="static/enchant.js"></script>
+    <script src="static/ui.enchant.js"></script>
+    <script type="text/javascript" src="static/jquery-1.12.4.min.js"></script>
+    <script type="text/javascript" src="static/socket.io.3.0.5.min.js"></script>
+    <link rel="stylesheet" href="static/cardgame.css">
+    <script type="text/javascript" charset="utf-8">
+        enchant();
+
+        var GAME_W = 800;
+        var GAME_H = 600;
+        var CARD_W = 40;
+        var CARD_H = 60;
+        var TURN_E_X = 30;
+        var TURN_E_Y = 200;
+        var TURN_M_X = 30;
+        var TURN_M_Y = 400;
+        var TURN_FONT_SIZE = 50;
+        var CARDS_X_S = 100;
+        var CARDS_X_E = 750;
+        var CARDS_E_Y = 100;
+        var CARDS_DECK_SHIFT = 400;
+        var CARDS_OPEN_SHIFT = 20;
+        var CARD_NOW_X = 200;
+        var CARD_NOW_Y = 300;
+        var POOL_X = 600;
+        var POOL_Y = 300;
+        var CENTER_X = GAME_W / 2;
+        var CENTER_Y = GAME_H / 2;
+        var BUTTON_Y = CARDS_E_Y + CARD_H + 5;
+
+        var playerId = {{ player_id }};
+        var playerName = "{{player_name}}";
+        var img_cards = "{{card_file}}";
+
+        window.onload = function () {
+            namespace = '/test';
+            var socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port + namespace);
+
+            var game = new Game(GAME_W, GAME_H);
+            game.preload(img_cards);
+
+            // 持ち札
+            var myCards = [];
+            var enemyCards = [];
+            //攻撃ボタン
+            var buttons = [];
+
+            // color: "b" or "w"
+            // index: 0-11
+            function createCard(g, color, cardnum, index, isopen) {
+                var cardIndex = cardnum;
+                if (color == "b") {
+                    cardIndex += 14;
+                }
+
+                var card = new Sprite(CARD_W, CARD_H);
+                card.moveTo(-100, -100); //最初は表示しない
+
+                card.image = g.assets[img_cards];
+                card.frame = cardIndex;
+                card.deck_index = index;
+                card.isopen = isopen;
+                card.ontouchstart = function () {
+                    if (card.y > CENTER_Y) {
+                        return;
+                    }
+
+                    socket.emit("select", { "player_id": playerId, "index": this.deck_index });
+                };
+
+                return card;
+            }
+
+            // cards: Cardの配列
+            // deck: "e" or "m" 配置する側
+            function arrangeCards(cards, deck) {
+                var interval = (CARDS_X_E - CARDS_X_S) / cards.length; //カードの間隔を計算
+                var y_shift = 0;
+                var cardarray = null;
+
+                if (deck == "m") {
+                    for (i in myCards) {
+                        game.rootScene.removeChild(myCards[i]);
+                    }
+                    //カードクリア
+                    myCards = [];
+                    cardarray = myCards;
+                    y_shift += CARDS_DECK_SHIFT; //自陣ならY座標をシフト
+                } else {
+                    for (i in enemyCards) {
+                        game.rootScene.removeChild(enemyCards[i]);
+                    }
+                    //カードクリア
+                    enemyCards = [];
+                    cardarray = enemyCards;
+                }
+
+                for (var i = 0; i < cards.length; i++) {
+                    c_x = CARDS_X_S + interval * i - cards[i].width / 2;
+                    c_y = CARDS_E_Y + y_shift - cards[i].height / 2;
+                    if (deck == "m" && cards[i].isopen) {
+                        //開いているなら少し上にシフト
+                        c_y -= CARDS_OPEN_SHIFT;
+                    }
+                    cards[i].moveTo(c_x, c_y);
+                    cardarray.push(cards[i]);
+                }
+            }
+
+            game.onload = function () {
+                var scene = game.rootScene;
+                scene.backgroundColor = "white";
+
+                // 札
+                var senkou = createCard(game, "w", 13, -1, true);
+                var koukou = createCard(game, "b", 13, -1, true);
+                scene.addChild(senkou);
+                scene.addChild(koukou);
+
+                // deck: "e" or "m" 先攻を配置する側
+                function setTurn(deck) {
+                    if (deck == "m") {
+                        senkou.moveTo(TURN_M_X, TURN_M_Y);
+                        koukou.moveTo(TURN_E_X, TURN_E_Y);
+                    } else {
+                        koukou.moveTo(TURN_M_X, TURN_M_Y);
+                        senkou.moveTo(TURN_E_X, TURN_E_Y);
+                    }
+                }
+
+                function getCardObj(color, num, index, isopen) {
+                    var c = createCard(game, color, num, index, isopen);
+                    scene.addChild(c);
+                    return c;
+                }
+
+                function getCardsObj(colors, nums, status) {
+                    var cardsObj = [];
+                    for (i in colors) {
+                        num = nums[i] == null ? 12 : parseInt(nums[i]);
+                        c = getCardObj(colors[i], num, i, status[i]);
+                        cardsObj.push(c);
+                    }
+                    return cardsObj;
+                }
+
+                // 山札
+                var n = 0;
+                var yama = createCard(game, "w", 12, true);
+                yama.moveTo(POOL_X - yama.width / 2, POOL_Y - yama.height / 2);
+                scene.addChild(yama);
+
+                // wait/ゲームスタート/win/lose文字
+                var startText = new Label('あいての接続待ち...');
+                startText.width = 600;
+                startText.color = "#992222";
+                startText.font = "36px 'ＭＳ 明朝', 'ＭＳ ゴシック', 'Times New Roman', serif, sans-serif";
+                startText.moveTo(CENTER_X - startText.width / 2, CENTER_Y - startText.height / 2);
+                scene.addChild(startText);
+
+                // ユーザ名文字
+                var userText = new Label("USER: " + playerName);
+                userText.width = 600;
+                userText.moveTo(10, 10);
+                userText.color = "#111111";
+                userText.font = "18px 'ＭＳ 明朝', 'ＭＳ ゴシック', 'Times New Roman', serif, sans-serif";
+                scene.addChild(userText);
+
+                // 通知文字
+                var infoText = new Label("> ");
+                infoText.width = 600;
+                infoText.moveTo(10, 30);
+                infoText.color = "#111111";
+                infoText.font = "10px 'ＭＳ ゴシック', 'ＭＳ 明朝', 'Times New Roman', serif, sans-serif";
+                scene.addChild(infoText);
+
+                var turnEndButton = new Button("Turn end", "light", 20, 100);
+                turnEndButton.moveTo(GAME_W - turnEndButton.width * 2, GAME_H - turnEndButton.height * 2);
+                turnEndButton.ontouchstart = function () {
+                    socket.emit("attack", { "skip": true });
+                }
+                turnEndButton.displaying = false;
+
+                var resetButton = new Button("reset", "light", 20, 100);
+                resetButton.moveTo(GAME_W - resetButton.width * 2, GAME_H - resetButton.height * 2);
+                resetButton.ontouchstart = function () {
+                    socket.emit("reset", { "player_id": playerId });
+                }
+
+                // 引き札
+                var dcard = null;
+
+                socket.on('connect', function () {
+                    // ゲームスタート
+                    socket.emit("game_start", { "player_id": playerId });
+                });
+
+                // イベントたち
+                yama.ontouchstart = function () {
+                    socket.emit('draw_card', { "player_id": playerId });
+                }
+
+                socket.on("start_res", function (msg) {
+                    scene.removeChild(resetButton);
+                    startText.text = "GAME START!!!"
+                    setTimeout(function () {
+                        scene.removeChild(startText)
+                        // スタートしたら先攻後攻を表示
+                        var turn_senkou = msg.attacker == playerId;
+                        var senkou = turn_senkou ? "m" : "e";
+                        setTurn(senkou);
+                        // 並べる
+                        socket.emit("get_cards", { "player_id": playerId });
+                    }, 1000);
+                });
+
+                socket.on("get_cards_res", function (msg) {
+                    var pid = msg.player_id;
+                    var cards = getCardsObj(msg.cardcolors, msg.cardnums, msg.status);
+                    var deck = pid == playerId ? "m" : "e";
+                    arrangeCards(cards, deck);
+                });
+
+                socket.on("draw_card_res", function (msg) {
+                    var res = msg.result;
+                    if (res) {
+                        dcard = getCardObj(msg.drawn_card_color, msg.drawn_card_num);
+                        dcard.moveTo(POOL_X - dcard.width / 2, POOL_Y + dcard.height / 2 + 5);
+                        scene.addChild(dcard);
+                    }
+                });
+
+                socket.on("attack_res", function (msg) {
+                    for (i in buttons) {
+                        scene.removeChild(buttons[i]);
+                    }
+                    buttons = [];
+                    socket.emit("get_cards", { "player_id": playerId });
+                    if (!msg.result) {
+                        scene.removeChild(dcard);
+                        scene.removeChild(turnEndButton);
+                        turnEndButton.displaying = false;
+                    } else {
+                        if (msg.attacker == playerId && !turnEndButton.displaying) {
+                            scene.addChild(turnEndButton);
+                            turnEndButton.displaying = true;
+                        }
+                    }
+                });
+
+                socket.on("select_cast", function (msg) {
+                    if (msg.attacker == playerId) {
+                        for (i in enemyCards) {
+                            enemyCards[i].scaleX = 1;
+                            enemyCards[i].scaleY = 1;
+                        }
+                        enemyCards[msg.index].scale(1.3, 1.3);
+
+                        for (i in buttons) {
+                            game.rootScene.removeChild(buttons[i]);
+                        }
+                        buttons = [];
+                        for (var i = 0; i < 12; i++) {
+                            var b = new Button(i, "light", 20, 20);
+                            b.moveTo(CARDS_X_S + i * (b.width + 25), BUTTON_Y);
+                            b.ontouchstart = function () {
+                                socket.emit("attack", { "player_id": playerId, "target_index": msg.index, "card_number": this.text, "skip": false });
+                            };
+                            buttons.push(b);
+                            scene.addChild(b);
+                        }
+                    } else {
+                        for (i in myCards) {
+                            myCards[i].scaleX = 1;
+                            myCards[i].scaleY = 1;
+                        }
+                        myCards[msg.index].scale(1.3, 1.3);
+                    }
+                });
+
+                socket.on("won", function (msg) {
+                    if (msg.player_id == 0) {
+                        startText.text = "DRAW";
+                        scene.addChild(startText);
+                    } else {
+                        if (msg.player_id == playerId) {
+                            startText.text = "WIN!!";
+                            scene.addChild(startText);
+                        } else {
+                            startText.text = "LOSE...";
+                            scene.addChild(startText);
+                        }
+                    }
+                    scene.removeChild(turnEndButton);
+                    turnEndButton.displaying = false;
+                    scene.removeChild(dcard);
+                    scene.addChild(resetButton);
+                });
+
+                socket.on("info_text", function (msg) {
+                    if (msg.player_id == playerId) {
+                        infoText.text = msg.text;
+                    }
+                });
+            };
+
+            game.start();
+        }
+    </script>
+</head>
+
+<body>
+    <canvas id='world'></canvas>
+</body>
+
+</html>
